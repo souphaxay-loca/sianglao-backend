@@ -43,35 +43,39 @@ class ASRService:
         Path(self.temporaryStorageLocation).mkdir(parents=True, exist_ok=True)
     
     def processAudio(self, request_id: str, audio_source, filename: str, source_type: str = "file") -> bool:
+        """
+        Unified audio processing for both file uploads and live recordings
+        """
         try:
-            print(f"📤 Processing audio for request {request_id}")
+            print(f"📤 Processing audio for request {request_id} (type: {source_type})")
             
             # Get the request object
             if request_id not in self.activeRequests:
                 print(f"❌ Request {request_id} not found")
                 return False
             
-            request = self.activeRequests[request_id]  # ← ADD THIS
+            request = self.activeRequests[request_id]
             
-            # Step 1: Save to disk (different handling)
-            if source_type == "file":
-                audio_input = self._save_uploaded_file(request_id, audio_source, filename)
-            else:  # bytes
-                audio_input = self._save_recorded_bytes(request_id, audio_source, filename)
+            # Step 1: Save to disk (works for both files and blobs)
+            audio_input = self._save_audio_data(request_id, audio_source, filename)
+            if not audio_input:
+                request.setError("Failed to save audio data")
+                return False
             
-            # Step 2-4: Same pipeline for both
+            # Step 2: Validate audio file
             is_valid, message = self._validate_audio_file(audio_input)
             if not is_valid:
-                request.setError(f"Audio validation failed: {message}")  # ← ADD THIS
+                request.setError(f"Audio validation failed: {message}")
                 return False
                 
+            # Step 3: Convert to standard WAV format
             processed_path = self._convert_to_wav(audio_input) 
             if not processed_path:
-                request.setError("Audio format conversion failed")  # ← ADD THIS
+                request.setError("Audio format conversion failed")
                 return False
             
-            # THE MISSING LINE:
-            request.associatedAudio = processed_path  # ← ADD THIS!
+            # Step 4: Associate processed audio with request
+            request.associatedAudio = processed_path
             
             print(f"✅ Audio processing completed for request {request_id}")
             return True
@@ -81,14 +85,6 @@ class ASRService:
             if request_id in self.activeRequests:
                 self.activeRequests[request_id].setError(f"Audio processing error: {str(e)}")
             return False
-
-    # Simple wrappers
-    def processUploadedAudio(self, request_id: str, uploaded_file, filename: str) -> bool:
-        return self.processAudio(request_id, uploaded_file, filename, "file")
-
-    def processRecordedAudio(self, request_id: str, audio_bytes: bytes, filename: str = None) -> bool:
-        filename = filename or f"recording_{int(time.time())}.wav"
-        return self.processAudio(request_id, audio_bytes, filename, "bytes")
     
     def initiateTranscription(self, request_id: str) -> bool:
         """
@@ -187,7 +183,6 @@ class ASRService:
             
             # Step 4: Complete
             request.setResult(final_transcription)
-            print('---- dfssfsd ---', final_transcription)
             print(f"🎉 Transcription completed for {request_id}")
             
         except Exception as e:
@@ -214,22 +209,6 @@ class ASRService:
         
         return status_info
     
-    def retrieveAudioPath(self, request_id: str) -> Optional[str]:
-        """Get path to audio file for playback"""
-        if request_id not in self.activeRequests:
-            return None
-        
-        request = self.activeRequests[request_id]
-        return request.associatedAudio
-    
-    # def getTranscriptionFile(self, request_id: str) -> Optional[str]:
-    #     """Get transcription as downloadable file (future implementation)"""
-    #     transcription = self.getResultText(request_id)
-    #     if not transcription:
-    #         return None
-        
-    #     # TODO: Create downloadable file
-    #     return transcription.exportAsText()
     
     def getResultText(self, request_id: str) -> Optional[Transcription]:
         """Get transcription result"""
@@ -270,8 +249,8 @@ class ASRService:
     # Helper Methods
     # ================================
     
-    def _save_uploaded_file(self, request_id: str, uploaded_file, original_filename: str) -> AudioInput:
-        """Save uploaded file to request directory"""
+    def _save_audio_data(self, request_id: str, audio_source, original_filename: str) -> AudioInput:
+        """Save audio data (file or blob) to request directory"""
         audio_input = AudioInput(request_id, original_filename)
         
         # Create request directory
@@ -281,8 +260,8 @@ class ASRService:
         safe_filename = f"original_{audio_input.audioID}{Path(original_filename).suffix}"
         file_path = request_dir / safe_filename
         
-        # Save file
-        uploaded_file.save(str(file_path))
+        # Save audio data (works for both FileStorage and blob data)
+        audio_source.save(str(file_path))
         audio_input.setFilePath(str(file_path))
         
         return audio_input
@@ -435,14 +414,14 @@ class ASRService:
             
             if strategy == "confidence_weighted":
                 final_text, final_confidence = self._confidence_weighted_ensemble(results)
-                final_text = final_text.replace("<unk>", " ")
+                # final_text = final_text.replace("<unk>", " ")
             elif strategy == "best_model":
                 final_text, final_confidence = self._best_model_ensemble(results)
-                final_text = final_text.replace("<unk>", " ")
+                # final_text = final_text.replace("<unk>", " ")
             else:
                 # Fallback to best model
                 final_text, final_confidence = self._best_model_ensemble(results)
-                final_text = final_text.replace("<unk>", " ")
+                # final_text = final_text.replace("<unk>", " ")
             # Create transcription object
             transcription = Transcription(final_text, final_confidence)
             transcription.setIndividualResults(results)

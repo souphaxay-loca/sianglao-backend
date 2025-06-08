@@ -288,6 +288,7 @@ class Transcription:
     def setIndividualResults(self, results: Dict[str, Dict]) -> None:
         """Set individual model results from ML service"""
         self.individual_results = results
+        print('---- results ---', results)
         
         print(f"🔍 Transcription {self.transcriptionID}: {len(results)} model results")
         for model, result in results.items():

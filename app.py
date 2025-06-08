@@ -8,10 +8,11 @@ import os
 import time
 import traceback
 from datetime import datetime
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 from pathlib import Path
+import threading
 
 # Import our services and models
 from config import config, create_directories, validate_audio_file_type, get_max_file_size_bytes
@@ -61,13 +62,9 @@ def root():
         "active_requests": len(asr_service.activeRequests),
         "endpoints": {
             "upload": "POST /api/upload",
-            "record": "POST /api/record", 
             "transcribe": "POST /api/transcribe/<request_id>",
             "status": "GET /api/status/<request_id>",
-            "result": "GET /api/result/<request_id>",
-            "audio": "GET /api/audio/<request_id>",
-            "download": "GET /api/download/<request_id>",
-            "cleanup": "DELETE /api/cleanup/<request_id>"
+            "result": "GET /api/result/<request_id>"
         }
     })
 
@@ -91,25 +88,39 @@ def health_check():
 # ================================
 
 @app.route('/api/upload', methods=['POST'])
-def submitUploadedAudio():
+def submitAudio():
     """
-    Upload audio file and create transcription request
+    Upload audio file or live recording and create transcription request
+    Handles both file uploads and recorded audio blobs
     Returns requestID immediately for async processing
     """
     try:
-        # Check if audio file is present
+        # Check if audio data is present
         if 'audio' not in request.files:
-            return create_error_response("No audio file provided", 400)
+            return create_error_response("No audio data provided", 400)
         
         audio_file = request.files['audio']
         
-        if audio_file.filename == '':
-            return create_error_response("No audio file selected", 400)
+        if not audio_file:
+            return create_error_response("No audio data received", 400)
         
-        # Validate file type
-        if not validate_audio_file_type(audio_file.filename):
-            supported = ", ".join(config.AUDIO_CONFIG["supported_input_formats"])
-            return create_error_response(f"Unsupported file type. Supported: {supported}", 400)
+        # Determine if this is a file upload or live recording
+        original_filename = audio_file.filename
+        is_live_recording = not original_filename or original_filename == ''
+        
+        if is_live_recording:
+            # Generate filename for live recording
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            # Default to webm for live recordings, but could be wav depending on frontend
+            original_filename = f"recording_{timestamp}.webm"
+            print(f"🎤 Processing live recording: {original_filename}")
+        else:
+            # Validate file type for uploaded files
+            if not validate_audio_file_type(original_filename):
+                supported = ", ".join(config.AUDIO_CONFIG["supported_input_formats"])
+                return create_error_response(f"Unsupported file type. Supported: {supported}", 400)
+            original_filename = secure_filename(original_filename)
+            print(f"📁 Processing uploaded file: {original_filename}")
         
         # Create ASR request
         asr_request = ASRRequest()
@@ -118,11 +129,12 @@ def submitUploadedAudio():
         # Add to active requests
         asr_service.activeRequests[request_id] = asr_request
         
-        # Process uploaded audio (sync validation)
-        success = asr_service.processUploadedAudio(
+        # Process audio (works for both files and blobs)
+        success = asr_service.processAudio(
             request_id, 
             audio_file, 
-            secure_filename(audio_file.filename)
+            original_filename,
+            source_type="recording" if is_live_recording else "file"
         )
         
         if not success:
@@ -133,24 +145,19 @@ def submitUploadedAudio():
         response_data = {
             "requestId": request_id,
             "status": asr_request.status,
-            "message": "Audio uploaded successfully. Use /api/transcribe to start processing.",
-            "filename": audio_file.filename
+            "message": "Audio processed successfully. Use /api/transcribe to start transcription.",
+            "filename": original_filename,
+            "type": "recording" if is_live_recording else "upload"
         }
         
         return create_success_response(response_data), 201
         
     except Exception as e:
-        error_msg = f"Upload failed: {str(e)}"
+        error_msg = f"Audio processing failed: {str(e)}"
         print(f"❌ {error_msg}")
         return create_error_response(error_msg, 500)
 
 
-# @app.route('/api/record', methods=['POST'])
-# def submitRecordedAudio():
-#     """
-#     Submit recorded audio data (future implementation)
-#     """
-#     return create_error_response("Recorded audio submission not yet implemented", 501)
 
 
 # ================================
@@ -268,91 +275,6 @@ def getTranscriptionText(request_id):
         return create_error_response(error_msg, 500)
 
 
-# ================================
-# Audio and Download Endpoints
-# ================================
-
-@app.route('/api/audio/<request_id>', methods=['GET'])
-def getAudioForPlayback(request_id):
-    """
-    Get audio file for playback
-    Returns the processed audio file
-    """
-    try:
-        audio_path = asr_service.retrieveAudioPath(request_id)
-        
-        if not audio_path or not os.path.exists(audio_path):
-            return create_error_response("Audio file not found", 404)
-        
-        return send_file(
-            audio_path,
-            as_attachment=False,
-            download_name=f"audio_{request_id}.wav",
-            mimetype="audio/wav"
-        )
-        
-    except Exception as e:
-        error_msg = f"Audio retrieval failed: {str(e)}"
-        print(f"❌ {error_msg}")
-        return create_error_response(error_msg, 500)
-
-
-# @app.route('/api/download/<request_id>', methods=['GET'])
-# def downloadTranscription(request_id):
-#     """
-#     Download transcription as text file
-#     """
-#     try:
-#         transcription = asr_service.getResultText(request_id)
-        
-#         if not transcription:
-#             return create_error_response("Transcription not found or not completed", 404)
-        
-#         # Create temporary text file
-#         request_dir = Path(config.STORAGE_CONFIG["uploads_dir"]) / request_id
-#         text_file = request_dir / f"transcription_{request_id}.txt"
-        
-#         with open(text_file, 'w', encoding='utf-8') as f:
-#             f.write(transcription.exportAsText())
-        
-#         return send_file(
-#             str(text_file),
-#             as_attachment=True,
-#             download_name=f"lao_transcription_{request_id}.txt",
-#             mimetype="text/plain"
-#         )
-        
-#     except Exception as e:
-#         error_msg = f"Download failed: {str(e)}"
-#         print(f"❌ {error_msg}")
-#         return create_error_response(error_msg, 500)
-
-
-# ================================
-# Cleanup Endpoints
-# ================================
-
-@app.route('/api/cleanup/<request_id>', methods=['DELETE'])
-def cleanupSession(request_id):
-    """
-    Clean up request and associated files
-    """
-    try:
-        success = asr_service.cleanupRequest(request_id)
-        
-        if success:
-            response_data = {
-                "requestId": request_id,
-                "message": "Request cleaned up successfully"
-            }
-            return create_success_response(response_data), 200
-        else:
-            return create_error_response("Request not found or cleanup failed", 404)
-        
-    except Exception as e:
-        error_msg = f"Cleanup failed: {str(e)}"
-        print(f"❌ {error_msg}")
-        return create_error_response(error_msg, 500)
 
 
 # ================================
@@ -431,7 +353,7 @@ def start_cleanup_scheduler():
     def cleanup_loop():
         while True:
             try:
-                time.sleep(config.STORAGE_CONFIG["auto_cleanup_interval"])  # 1 hour
+                time.sleep(config.PROCESSING_CONFIG["auto_cleanup_interval"])
                 cleanup_expired_requests_task()
             except Exception as e:
                 print(f"⚠️  Cleanup error: {e}")
@@ -478,6 +400,9 @@ def initialize_service():
     startup_time = time.time() - STARTUP_TIME
     print(f"\n🎉 Backend service initialized in {startup_time:.1f}s")
     print(f"🌐 Ready to serve requests on {config.FLASK_HOST}:{config.FLASK_PORT}")
+    
+    # start cleanup scheduler
+    start_cleanup_scheduler()
     
     return True
 
