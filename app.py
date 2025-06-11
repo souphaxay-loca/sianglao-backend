@@ -26,7 +26,7 @@ app = Flask(__name__)
 
 # Configure CORS
 if config.SECURITY_CONFIG["enable_cors"]:
-    CORS(app, origins=config.SECURITY_CONFIG["allowed_origins"])
+    CORS(app, origins=config.SECURITY_CONFIG["allowed_origins"], methods=["GET", "POST"], allow_headers=["Content-Type"])
 
 # Configure upload limits
 app.config['MAX_CONTENT_LENGTH'] = get_max_file_size_bytes()
@@ -145,7 +145,7 @@ def submitAudio():
         response_data = {
             "requestId": request_id,
             "status": asr_request.status,
-            "message": "Audio processed successfully. Use /api/transcribe to start transcription.",
+            "message": "Audio processed successfully",
             "filename": original_filename,
             "type": "recording" if is_live_recording else "upload"
         }

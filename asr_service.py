@@ -414,14 +414,14 @@ class ASRService:
             
             if strategy == "confidence_weighted":
                 final_text, final_confidence = self._confidence_weighted_ensemble(results)
-                # final_text = final_text.replace("<unk>", " ")
+                final_text = final_text.replace("<unk>", " ")
             elif strategy == "best_model":
                 final_text, final_confidence = self._best_model_ensemble(results)
-                # final_text = final_text.replace("<unk>", " ")
+                final_text = final_text.replace("<unk>", " ")
             else:
                 # Fallback to best model
                 final_text, final_confidence = self._best_model_ensemble(results)
-                # final_text = final_text.replace("<unk>", " ")
+                final_text = final_text.replace("<unk>", " ")
             # Create transcription object
             transcription = Transcription(final_text, final_confidence)
             transcription.setIndividualResults(results)
@@ -448,7 +448,7 @@ class ASRService:
                 continue
             
             confidence = result.get("confidence", 0.0)
-            prediction = result.get("prediction", "")
+            prediction = result.get("raw_prediction", "")
             weight = weights.get(model_name, 0.1)  # Default small weight
             
             weighted_score = confidence * weight
@@ -472,7 +472,7 @@ class ASRService:
             confidence = result.get("confidence", 0.0)
             if confidence > best_confidence:
                 best_confidence = confidence
-                best_text = result.get("prediction", "")
+                best_text = result.get("raw_prediction", "")
         
         return best_text, best_confidence
 
