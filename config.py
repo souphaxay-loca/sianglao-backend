@@ -40,7 +40,7 @@ class Config:
         "channels": 1,  # Mono
         "format": "WAV",
         "subtype": "PCM_16",
-        "supported_input_formats": [".wav", ".mp3", ".m4a", ".ogg", ".flac", ".webm"],
+        "supported_input_formats": [".wav", ".mp3", ".webm"],
         "max_duration_seconds": 30,
         "min_duration_seconds": 0.5,
         "max_file_size_mb": 10,
@@ -130,7 +130,7 @@ class Config:
         "enable_cors": True,
         "allowed_origins": ["http://localhost:3000"],  # testing
         "max_upload_size": 10 * 1024 * 1024,  # 10MB in bytes
-        "allowed_file_types": [".wav", ".mp3", ".m4a", ".ogg", ".flac"],
+        "allowed_file_types": [".wav", ".mp3", ".webm"],
         "validate_file_headers": True,
         "sanitize_filenames": True,
         "rate_limiting": False  # Can be enabled later

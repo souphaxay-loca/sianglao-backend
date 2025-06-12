@@ -198,9 +198,7 @@ class AudioInput:
         media_types = {
             '.wav': 'audio/wav',
             '.mp3': 'audio/mpeg',
-            '.m4a': 'audio/mp4',
-            '.ogg': 'audio/ogg',
-            '.flac': 'audio/flac'
+            '.webm': 'audio/webm'
         }
         return media_types.get(file_extension.lower(), 'audio/unknown')
     
