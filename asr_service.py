@@ -19,6 +19,101 @@ from datetime import datetime
 from models import ASRRequest, AudioInput, Transcription, RequestStatus, create_request_directory
 from config import config, AUDIO_CONFIG, ENSEMBLE_CONFIG, ML_SERVICE_CONFIG, get_ml_service_url
 
+def robust_audio_load(file_path: str, sr=None, mono=False, **kwargs) -> Tuple[Optional[np.ndarray], Optional[int]]:
+    """
+    Robust audio loading with multiple backend fallbacks for Windows compatibility
+    
+    Args:
+        file_path: Path to audio file
+        sr: Target sample rate (None to preserve original)
+        mono: Convert to mono
+        **kwargs: Additional arguments for librosa.load
+    
+    Returns:
+        Tuple of (audio_data, sample_rate) or (None, None) if failed
+    """
+    last_error = None
+    
+    # Method 1: Try librosa with soundfile backend (preferred)
+    try:
+        audio_data, sample_rate = librosa.load(file_path, sr=sr, mono=mono, **kwargs)
+        return audio_data, sample_rate
+    except Exception as e:
+        last_error = e
+        print(f"⚠️  soundfile backend failed: {e}")
+    
+    # Method 2: Try with explicit audioread backend
+    try:
+        import audioread
+        audio_data, sample_rate = librosa.load(file_path, sr=sr, mono=mono, **kwargs)
+        return audio_data, sample_rate
+    except Exception as e:
+        last_error = e
+        print(f"⚠️  audioread backend failed: {e}")
+    
+    # Method 3: Try direct soundfile loading
+    try:
+        import soundfile as sf_direct
+        audio_data, sample_rate_orig = sf_direct.read(file_path)
+        
+        # Handle resampling if needed
+        if sr is not None and sr != sample_rate_orig:
+            audio_data = librosa.resample(audio_data, orig_sr=sample_rate_orig, target_sr=sr)
+            sample_rate_orig = sr
+        
+        # Handle mono conversion
+        if mono and len(audio_data.shape) > 1:
+            audio_data = np.mean(audio_data, axis=1)
+        
+        return audio_data, sample_rate_orig
+        
+    except Exception as e:
+        last_error = e
+        print(f"⚠️  direct soundfile failed: {e}")
+    
+    # Method 4: Try scipy.io.wavfile for WAV files
+    try:
+        from scipy.io import wavfile
+        if file_path.lower().endswith('.wav'):
+            sample_rate_orig, audio_data = wavfile.read(file_path)
+            
+            # Convert to float32 and normalize
+            if audio_data.dtype == np.int16:
+                audio_data = audio_data.astype(np.float32) / 32768.0
+            elif audio_data.dtype == np.int32:
+                audio_data = audio_data.astype(np.float32) / 2147483648.0
+            
+            # Handle resampling if needed
+            if sr is not None and sr != sample_rate_orig:
+                audio_data = librosa.resample(audio_data, orig_sr=sample_rate_orig, target_sr=sr)
+                sample_rate_orig = sr
+            
+            # Handle mono conversion
+            if mono and len(audio_data.shape) > 1:
+                audio_data = np.mean(audio_data, axis=1)
+            
+            return audio_data, sample_rate_orig
+            
+    except Exception as e:
+        last_error = e
+        print(f"⚠️  scipy.wavfile failed: {e}")
+    
+    print(f"❌ All audio loading methods failed. Last error: {last_error}")
+    if os.name == 'nt':  # Windows
+        print(get_windows_audio_help_message())
+    return None, None
+
+def get_windows_audio_help_message() -> str:
+    """Get helpful error message for Windows audio issues"""
+    return """
+💡 Windows Audio Loading Tips:
+1. Install additional audio backends: pip install audioread[mp3] ffmpeg-python
+2. For MP3 files, ensure ffmpeg is installed: https://ffmpeg.org/download.html
+3. Convert files to WAV format for better compatibility
+4. Check if the file is corrupted or in an unsupported format
+5. Ensure the file path doesn't contain special characters
+    """
+
 class ASRService:
     """
     Business logic service for ASR processing
@@ -275,11 +370,13 @@ class ASRService:
             if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
                 return False, "Empty or missing audio file"
             
-            # Load audio for validation
-            try:
-                audio_data, sample_rate = librosa.load(file_path, sr=None, mono=False)
-            except Exception as e:
-                return False, f"Cannot read audio file: {str(e)}"
+            # Load audio for validation using robust loading
+            audio_data, sample_rate = robust_audio_load(file_path, sr=None, mono=False)
+            if audio_data is None or sample_rate is None:
+                error_msg = "Cannot read audio file: All audio loading methods failed"
+                if os.name == 'nt':  # Windows
+                    error_msg += get_windows_audio_help_message()
+                return False, error_msg
             
             # Duration check
             duration = len(audio_data) / sample_rate
@@ -318,12 +415,16 @@ class ASRService:
         try:
             input_path = audio_input.getFilePath()
             
-            # Load with target settings
-            audio_data, _ = librosa.load(
+            # Load with target settings using robust loading
+            audio_data, _ = robust_audio_load(
                 input_path,
                 sr=AUDIO_CONFIG["sample_rate"],
                 mono=True
             )
+            
+            if audio_data is None:
+                print(f"❌ Failed to load audio for conversion: {input_path}")
+                return None
             
             # Generate output path
             request_dir = Path(input_path).parent
@@ -353,7 +454,7 @@ class ASRService:
                 print(f"❌ Audio file not found: {audio_path}")
                 return None, None
             
-            audio_data, sample_rate = librosa.load(
+            audio_data, sample_rate = robust_audio_load(
                 audio_path,
                 sr=AUDIO_CONFIG["sample_rate"],
                 mono=True
