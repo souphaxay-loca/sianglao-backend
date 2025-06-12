@@ -88,4 +88,4 @@ test_audio/
 # Config
 # It's a good practice to not commit config files with sensitive data.
 # Instead, you can create a config.example.py and commit that.
-config.py
+#config.py
